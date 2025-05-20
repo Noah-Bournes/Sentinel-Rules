@@ -1,0 +1,28 @@
+//User Assigned Privileged Role
+
+let RoleKeywords = dynamic(["Add eligible member to role", "Add member to role"]);
+AuditLogs 
+| where Category == "RoleManagement"
+| where AADOperationType in~ ("Assign", "AssignEligibleRole")
+| where ActivityDisplayName has_any (RoleKeywords)
+| mv-expand TargetResources
+| extend modifiedProps = parse_json(TargetResources.modifiedProperties)
+| mv-expand bagexpansion=array modifiedProps
+| evaluate bag_unpack(modifiedProps)
+| extend displayName = column_ifexists("displayName", ""), 
+         newValue = tostring(column_ifexists("newValue", ""))
+| where displayName =~ "Role.DisplayName"
+| extend RoleName = trim(@'"', newValue)
+| where RoleName has "Admin"
+| extend InitApp = parse_json(InitiatedBy.app),
+         InitUser = parse_json(InitiatedBy.user)
+| extend AppDisplayName = tostring(InitApp.displayName),
+         InitiatedUserUPN = tostring(InitUser.userPrincipalName),
+         InitiatedUserIP = tostring(InitUser.ipAddress)
+| extend Initiator = iff(isnotempty(AppDisplayName), AppDisplayName, InitiatedUserUPN)
+| where Initiator != "MS-PIM"
+| extend Target = tostring(TargetResources.userPrincipalName)
+| summarize by bin(TimeGenerated, 1h), OperationName, RoleName, Target, Initiator, InitiatedUserIP
+| extend AccountCustomEntity = Target, 
+         IPCustomEntity = InitiatedUserIP,
+         timestamp = TimeGenerated
