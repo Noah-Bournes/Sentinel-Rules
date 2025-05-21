@@ -131,3 +131,60 @@ imNetworkSession
     RiskScore,
     AlertDescription,
     Entities
+
+
+    // Rule.3 User added to Azure Active Directory Privileged Groups
+
+
+let OperationList = dynamic(["Add member to role", "Add member to role in PIM requested (permanent)"]);
+let PrivilegedGroups = dynamic(["UserAccountAdmins", "PrivilegedRoleAdmins", "TenantAdmins"]);
+AuditLogs
+| where LoggedByService =~ "Core Directory" // Uncommented this filter to ensure relevant events
+| where Category =~ "RoleManagement"
+| where OperationName in~ (OperationList)
+| mv-expand TargetResources
+| extend modProps = TargetResources.modifiedProperties // Fixed data access pattern
+| mv-expand bagexpansion=array modProps
+| evaluate bag_unpack(modProps)
+| extend displayName = column_ifexists("displayName", "NotAvailable"), newValue = column_ifexists("newValue", "NotAvailable")
+| where displayName =~ "Role.WellKnownObjectName"
+| extend DisplayName = displayName, GroupName = replace('"', '', newValue)
+| where GroupName in~ (PrivilegedGroups)
+| extend initByApp = parse_json(InitiatedBy).app, initByUser = parse_json(InitiatedBy).user
+// Extract target user information
+| mv-expand TargetResourcesExpanded = TargetResources
+| extend TargetUserPrincipalName = tostring(TargetResourcesExpanded.userPrincipalName)
+// Initiator information
+| extend AppId = tostring(initByApp.appId), 
+    InitiatedByDisplayName = case(
+        isnotempty(initByApp.displayName), tostring(initByApp.displayName), 
+        isnotempty(initByUser.displayName), tostring(initByUser.displayName), 
+        "not available"),
+    ServicePrincipalId = tostring(initByApp.servicePrincipalId),
+    ServicePrincipalName = tostring(initByApp.servicePrincipalName),
+    UserId = tostring(initByUser.id),
+    UserIPAddress = tostring(initByUser.ipAddress),
+    UserRoles = initByUser.roles,
+    UserPrincipalName = tostring(initByUser.userPrincipalName)
+// Filter out PIM-initiated operations if needed
+| where InitiatedByDisplayName != "MS-PIM"
+| project TimeGenerated, 
+    OperationName,
+    Category,
+    AADTenantId,
+    AppId, 
+    InitiatedByDisplayName, 
+    ServicePrincipalId, 
+    ServicePrincipalName, 
+    GroupName, 
+    UserId, 
+    UserIPAddress, 
+    UserRoles, 
+    UserPrincipalName, 
+    TargetUserPrincipalName
+| extend timestamp = TimeGenerated, 
+    AccountCustomEntity = case(
+        isnotempty(ServicePrincipalName), ServicePrincipalName, 
+        isnotempty(ServicePrincipalId), ServicePrincipalId, 
+        isnotempty(UserPrincipalName), UserPrincipalName, 
+        "not available")
