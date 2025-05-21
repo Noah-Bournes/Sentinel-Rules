@@ -1,0 +1,89 @@
+// Detect successful logon from IP and failure from another.
+// Set configurable parameters
+let logonDiff = 10m;                     // Time window between successful and failed logins
+let lookback = 1d;                       // Query time scope
+let excludedApps = dynamic(["Office 365 Exchange Online", "Skype for Business Online"]);
+let successCodes = dynamic(["0"]);       // Success codes
+let ignoreCodes = dynamic(["0", "50140"]); // Codes to ignore in failed login detection (success + benign errors)
+
+// Function to process both SigninLogs and AADNonInteractiveUserSignInLogs with the same logic
+let aadFunc = (tableName:string){
+    table(tableName) 
+    | where TimeGenerated > ago(lookback)
+    | where isnotempty(UserPrincipalName) and isnotempty(IPAddress)
+    | where ResultType in (successCodes) // Success logons only
+    | where AppDisplayName !in (excludedApps)
+    | project 
+        SuccessLogonTime = TimeGenerated, 
+        UserPrincipalName, 
+        SuccessIPAddress = IPAddress, 
+        SuccessLocation = Location, 
+        AppDisplayName, 
+        SuccessDeviceDetail = iif(isempty(DeviceDetail.displayName), "Unknown", tostring(DeviceDetail.displayName)),
+        SuccessIPBlock = case(
+            IPAddress contains ":", parse_ipv6(IPAddress).Prefix, // Handle IPv6
+            IPAddress contains ".", strcat(split(IPAddress, ".")[0], ".", split(IPAddress, ".")[1]), // Handle IPv4 
+            "Unknown"
+        ),
+        SuccessResultType = ResultType,
+        Type
+    | join kind= inner (
+        table(tableName)
+        | where TimeGenerated > ago(lookback)
+        | where isnotempty(UserPrincipalName) and isnotempty(IPAddress)
+        | where ResultType !in (ignoreCodes) // Exclude success + benign transient failures
+        | where ResultDescription !~ "Other"  
+        | where AppDisplayName !in (excludedApps)
+        | project 
+            FailedLogonTime = TimeGenerated, 
+            UserPrincipalName, 
+            FailedIPAddress = IPAddress, 
+            FailedLocation = Location,
+            AppDisplayName, 
+            FailedDeviceDetail = iif(isempty(DeviceDetail.displayName), "Unknown", tostring(DeviceDetail.displayName)),
+            FailedIPBlock = case(
+                IPAddress contains ":", parse_ipv6(IPAddress).Prefix, // Handle IPv6
+                IPAddress contains ".", strcat(split(IPAddress, ".")[0], ".", split(IPAddress, ".")[1]), // Handle IPv4
+                "Unknown"
+            ),
+            ResultType, 
+            ResultDescription, 
+            Type
+    ) on UserPrincipalName, AppDisplayName 
+    | where SuccessLogonTime < FailedLogonTime 
+        and FailedLogonTime - SuccessLogonTime <= logonDiff 
+        and SuccessIPBlock != "Unknown" and FailedIPBlock != "Unknown"
+        and SuccessIPBlock != FailedIPBlock  // Different network blocks
+    | project
+        SuccessLogonTime,
+        FailedLogonTime,
+        UserPrincipalName,
+        AppDisplayName,
+        SuccessIPAddress,
+        SuccessIPBlock,
+        SuccessLocation,
+        SuccessDeviceDetail,
+        FailedIPAddress,
+        FailedIPBlock,
+        FailedLocation,
+        FailedDeviceDetail,
+        ResultType,
+        ResultDescription,
+        Type,
+        TimeDelta = FailedLogonTime - SuccessLogonTime
+    | extend 
+        timestamp = SuccessLogonTime,
+        AccountCustomEntity = UserPrincipalName,
+        SuccessIPCustomEntity = SuccessIPAddress,
+        FailedIPCustomEntity = FailedIPAddress,
+        SuccessTimeUTC = format_datetime(SuccessLogonTime, 'yyyy-MM-dd HH:mm:ss'),
+        FailedTimeUTC = format_datetime(FailedLogonTime, 'yyyy-MM-dd HH:mm:ss')
+};
+
+// Apply function to both tables
+let aadSignin = aadFunc("SigninLogs");
+let aadNonInt = aadFunc("AADNonInteractiveUserSignInLogs");
+
+// Combine results
+union isfuzzy=true aadSignin, aadNonInt
+| sort by UserPrincipalName asc, SuccessLogonTime desc
