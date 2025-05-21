@@ -1,7 +1,5 @@
 # Demo Sentinel Analytics Rules 
 
-<<<<<<< HEAD
-
 This repository contains custom and community-driven **Microsoft Sentinel Analytics Rules** designed to enhance threat detection, investigation, and response across your environment.
 
 ## 📌 Overview
@@ -15,10 +13,13 @@ Microsoft Sentinel uses Analytics Rules to proactively identify suspicious behav
 
 ## 🔍 What's Inside
 
-- `ScheduledRules/`: Rules that run on a recurring schedule
-- `FusionRules/`: Rules leveraging Microsoft's built-in machine learning
-- `NRT/`: Near-real-time rules for high-priority detections
-- `Templates/`: JSON rule templates for easy deployment via ARM or API
+- `MediumSeverityRules/`: Medium Severity Rules that run on a recurring schedule
+- `HighSeverityRules/`: High severity Rules that run on a recurring schedule
+- DefenderXDR
+- Entra ID
+- Azure Activity
+- MS 365
+
 
 =======
 This repository contains custom and community-driven **Microsoft Sentinel Analytics Rules** designed to enhance threat detection, investigation, and response across your environment.
