@@ -87,3 +87,47 @@ let aadNonInt = aadFunc("AADNonInteractiveUserSignInLogs");
 // Combine results
 union isfuzzy=true aadSignin, aadNonInt
 | sort by UserPrincipalName asc, SuccessLogonTime desc
+
+
+
+//Rule 2. Network Port Sweep detected
+
+let lookback = 1h;
+let threshold = 20;
+imNetworkSession
+| where TimeGenerated between (ago(lookback) .. now())
+| where NetworkDirection == "Inbound"
+| summarize 
+    StartTime = min(TimeGenerated),
+    EndTime = max(TimeGenerated),
+    DstIpCount = dcount(DstIpAddr), 
+    SrcIpList = make_set(SrcIpAddr, 100), 
+    DstIpList = make_set(DstIpAddr, 100), 
+    EventCount = count() 
+    by DstPortNumber, DstHostname
+| where DstIpCount > threshold
+| extend 
+    Severity = "Medium",
+    RiskScore = DstIpCount/10.0 + log(EventCount),
+    AlertDescription = strcat("Potential port scanning detected: High number of unique inbound IPs (", DstIpCount, ") targeting port ", tostring(DstPortNumber),
+                             ". Total sessions: ", tostring(EventCount), ". Activity timespan: ", format_datetime(StartTime, 'yyyy-MM-dd HH:mm:ss'), " to ", format_datetime(EndTime, 'yyyy-MM-dd HH:mm:ss')),
+    SourceIPs = array_sort_asc(SrcIpList)
+| extend 
+    Entities = pack_array(
+        pack("$id", "Port", "Port", tostring(DstPortNumber)),
+        pack("$id", "Host", "HostName", DstHostname)
+    )
+| project 
+    TimeGenerated = EndTime, 
+    StartTime,
+    EndTime,
+    DstPortNumber, 
+    DstHostname,
+    DstIpCount, 
+    EventCount, 
+    SourceIPs = SrcIpList,
+    DestinationIPs = DstIpList, 
+    Severity,
+    RiskScore,
+    AlertDescription,
+    Entities
